@@ -9,7 +9,7 @@ matplotlib.use("TkAgg")
 import osmnx as ox
 from shapely.geometry import LineString, MultiLineString
 from pyproj import CRS
-
+import random
 #used this website for pyrosm features such as custom filter
 #https://pyrosm.readthedocs.io/en/latest/basics.html
 
@@ -116,7 +116,8 @@ def load_and_convert_public_transport_graph(filepath: str = PBF_FILE) -> nx.Mult
     tmp_filepath = "temp_graph.graphml"
     ox.save_graphml(G, filepath=tmp_filepath)
     G_standard = ox.load_graphml(tmp_filepath)
-    G_standard = add_length_attribute(G_standard)
+    G_proj = ox.project_graph(G_standard)
+    G_standard = add_length_attribute(G_proj)
     os.remove(tmp_filepath)
 
     return G_standard
@@ -134,30 +135,75 @@ def show_map(G, node_size=10, edge_linewidth=0.5):
 
 def add_length_attribute(G):
     #makes sure each edge has a length, if there's a length already use that value, otherwise
-    # if length is missing it will compute euclidenan distance, since we're using crs,
-    # x and y are in longitude and latitude so it's a good rough estimate
+    # if length is missing we calulate it using distance in meters in graph
     # returns the graph with every edge having a length
     for u, v, key, data in G.edges(keys=True, data=True):
         if data.get("length") is None:
-            x1, y1 = G.nodes[u].get("x"), G.nodes[u].get("y")
-            x2, y2 = G.nodes[v].get("x"), G.nodes[v].get("y")
-            data["length"] = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+            x1, y1 = G.nodes[u]['x'], G.nodes[u]['y']
+            x2, y2 = G.nodes[v]['x'], G.nodes[v]['y']
+            data['length'] = math.hypot(x2 - x1, y2 - y1)
     return G
 
 def get_final_graph():
     # Check if the final graph already exists:
     if os.path.exists(GRAPHML_PATH):
         G = ox.load_graphml(GRAPHML_PATH)
+        G = ox.project_graph(G)
+        G = add_length_attribute(G)
     else:
         G = load_and_convert_public_transport_graph(PBF_FILE)
         ox.save_graphml(G, filepath=GRAPHML_PATH)
     return G
 
+#to get random nodes for algs
+def get_random_node_from_bbox(G, min_x, min_y, max_x, max_y):
+    candidates = [
+        node for node, data in G.nodes(data=True)
+        if data.get("x") is not None and data.get("y") is not None and
+           min_x <= data["x"] <= max_x and
+           min_y <= data["y"] <= max_y
+    ]
+    if not candidates:
+        raise ValueError("No nodes found in this bounding box.")
+    return random.choice(candidates)
+
+"""
+Bounding boxes for gainesville and Orlando areas for testing 
+gain_x_min, gain_x_max = 357000, 385000 
+gain_y_min, gain_y_max = 3263290, 3290360
+
+orlando_x_min, orlando_x_max = 434600, 479620
+orlando_y_min, orlando_y_max = 3134170, 3166610
+    """
+def get_gainesville_to_orlando_nodes(G):
+    gain_x_min, gain_x_max = 357000, 385000
+    gain_y_min, gain_y_max = 3263290, 3290360
+
+    orlando_x_min, orlando_x_max = 434600, 479620
+    orlando_y_min, orlando_y_max = 3134170, 3166610
+
+    start = get_random_node_from_bbox(G, gain_x_min, gain_y_min, gain_x_max, gain_y_max)
+    target = get_random_node_from_bbox(G, orlando_x_min, orlando_y_min, orlando_x_max, orlando_y_max)
+    return start, target
+
 if __name__ == "__main__":
     try:
+        G = get_final_graph()
+        start, target = get_gainesville_to_orlando_nodes(G)
+
+        print(f"Start node: {start}")
+        print(f"Location: ({G.nodes[start]['x']:.2f}, {G.nodes[start]['y']:.2f})")
+
+        print(f"Target node: {target}")
+        print(f"Location: ({G.nodes[target]['x']:.2f}, {G.nodes[target]['y']:.2f})")
+        map_stat(G)
+        ox.plot_graph(G, node_color=["red" if n == start else "blue" if n == target else "gray" for n in G.nodes],
+                      node_size=10, show=True)
+
         # Use get_final_graph to load or generate the graph
-        final_graph = get_final_graph()
-        map_stat(final_graph)
-        show_map(final_graph)
+        # final_graph = get_final_graph()
+        # map_stat(final_graph)
+        # show_map(final_graph)
+
     except Exception as e:
         print(f"Failed to generate graph: {e}")
