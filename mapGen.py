@@ -1,23 +1,21 @@
 import os
 import math
-import pandas as pd
+
 from pyrosm import OSM
 import networkx as nx
+import osmnx as ox
 import matplotlib
 matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
-import osmnx as ox
-# from shapely.geometry import LineString, MultiLineString, Point
-from pyproj import CRS
-# import random
-from pyproj import Transformer
+
+from pyproj import CRS, Transformer
+import pandas as pd
 #used this website for pyrosm features such as custom filter
 #https://pyrosm.readthedocs.io/en/latest/basics.html
 
 
 # Path to PBF file
 PBF_FILE = "data/small_Alachua.osm.pbf"
-GRAPHML_PATH = "maps/AlachuaTest.graphml"
+GRAPHML_PATH = "maps/AlachuaBusRoutes.graphml"
 
 def fix_boolean_fields(G):
     #iterates over edges and makes sure the oneway attribute is boolean instead of yes/no
@@ -38,34 +36,17 @@ def fix_boolean_fields(G):
     return G
 
 def load_and_convert_public_transport_graph(filepath: str = PBF_FILE, walk_penalty: float = 5.0) -> nx.MultiDiGraph:
+    #Loads a multimodal graph (walking, driving, bus stops, and bus routes)
+    #from a PBF file using Pyrosm.
     if not os.path.exists(filepath):
-        raise FileNotFoundError(f"File {filepath} does not exist")
+        raise FileNotFoundError(filepath)
     osm = OSM(filepath)
 
-    #Pull the pure walking network
-    nodes_walk, edges_walk = osm.get_network(
-        nodes=True,
-        network_type="walking"
-    )
+    # walking and driving networks
+    nodes_walk, edges_walk = osm.get_network(nodes=True, network_type="walking")
+    nodes_drive, edges_drive = osm.get_network(nodes=True, network_type="driving+service")
 
-    #Pull the drivable network
-    nodes_drive, edges_drive = osm.get_network(
-        nodes=True,
-        network_type="driving+service"
-    )
-
-    # Merge edges
-    edges = pd.concat([edges_walk, edges_drive], ignore_index=True)
-    if {"u", "v", "key"}.issubset(edges.columns):
-        edges = edges.drop_duplicates(subset=["u", "v", "key"])
-    else:
-        edges = edges.drop_duplicates(subset=["u", "v"])
-
-    # Merge nodes
-    nodes = pd.concat([nodes_walk, nodes_drive], ignore_index=True)
-    nodes = nodes.drop_duplicates(subset=["id"])
-
-    # get bus-stop Points and append them as transfer nodes
+    # all bus stops
     stops = osm.get_data_by_custom_criteria(
         custom_filter={"highway": ["bus_stop"]},
         filter_type="keep",
@@ -73,25 +54,82 @@ def load_and_convert_public_transport_graph(filepath: str = PBF_FILE, walk_penal
         keep_ways=False,
         keep_relations=False
     )
-    stops = stops.loc[stops.geometry.geom_type == "Point"] \
-                 .drop_duplicates(subset=["id"])
-    if not stops.empty:
-        nodes = pd.concat([nodes, stops], ignore_index=True) \
-                 .drop_duplicates(subset=["id"])
+    stops = stops[stops.geometry.type == "Point"]
+    print(f"Found {len(stops)} bus stops in the PBF file")
 
-    # Build the NetworkX graph
+    # bus edges(LineStrings)
+    bus_routes = osm.get_data_by_custom_criteria(
+        custom_filter={"route": ["bus"]},
+        filter_type="keep",
+        keep_nodes=False,
+        keep_ways=True,
+        keep_relations=True
+    )
+    bus_edges = bus_routes[bus_routes.geometry.type.isin(["LineString", "MultiLineString"])].copy()
+    bus_edges["route"] = "bus"
+    print(f"Found {len(bus_edges)} bus route edges in the PBF file")
+
+    # combine all nodes
+    all_nodes = (
+        pd.concat([nodes_walk, nodes_drive, stops], ignore_index=True)
+        .drop_duplicates(subset=["id"])
+    )
+
+    # Build coordinate → ID lookup for node matching
+    node_lookup = {}
+    for _, row in all_nodes.iterrows():
+        if hasattr(row.geometry, "x") and hasattr(row.geometry, "y"):
+            coord = (round(row.geometry.x, 6), round(row.geometry.y, 6))
+            node_lookup[coord] = row["id"]
+
+    # Match u, v for bus edges using node_lookup
+    def extract_uv_from_geometry(df, node_lookup):
+        def get_uv_ids(geom):
+            if geom is None or geom.is_empty:
+                return None, None
+            if geom.geom_type == "LineString":
+                coords = list(geom.coords)
+            elif geom.geom_type == "MultiLineString":
+                coords = list(geom.geoms[0].coords)
+            else:
+                return None, None
+            start = (round(coords[0][0], 6), round(coords[0][1], 6))
+            end   = (round(coords[-1][0], 6), round(coords[-1][1], 6))
+            return node_lookup.get(start), node_lookup.get(end)
+
+        uv_ids = df["geometry"].apply(get_uv_ids)
+        df["u"] = uv_ids.apply(lambda x: x[0])
+        df["v"] = uv_ids.apply(lambda x: x[1])
+        return df
+
+    bus_edges = extract_uv_from_geometry(bus_edges, node_lookup)
+    bus_edges = bus_edges.dropna(subset=["u", "v"])
+
+    # combine all edges
+    all_edges = pd.concat([edges_walk, edges_drive, bus_edges], ignore_index=True)
+
+    # build graph
     G = osm.to_graph(
-        nodes=nodes,
-        edges=edges,
+        nodes=all_nodes,
+        edges=all_edges,
         graph_type="networkx",
         osmnx_compatible=True
     )
 
-    # Project + lengths +  weights
+    # processing
     G.graph["crs"] = CRS.from_epsg(4326)
     G = ox.project_graph(G)
+    G = fix_boolean_fields(G)
     G = add_length_attribute(G)
-    G = assign_multimodal_weights(G, walk_penalty=walk_penalty)
+    G = assign_multimodal_weights(G, walk_penalty)
+
+    # print statements
+    bus_edge_count = sum(1 for *_ , d in G.edges(data=True) if d.get("route") == "bus")
+    print(
+        f"Graph built: {G.number_of_nodes():,} nodes ; "
+        f"{G.number_of_edges():,} edges ; "
+        f"{bus_edge_count:,} bus edges"
+    )
 
     return G
 
@@ -101,9 +139,40 @@ def map_stat(G: nx.MultiDiGraph) -> None:
     print(f"Nodes: {G.number_of_nodes()}, Edges: {G.number_of_edges()}")
 
 
-def show_map(G, node_size=1000, edge_linewidth=0.5):
-    fig, ax = ox.plot_graph(G, node_size=node_size, edge_linewidth=edge_linewidth, show=True)
-    # OSMnx calls plt.show() internally
+def show_map(G, node_size=0, edge_linewidth=0.5, bus_edge_color="blue", bus_edge_width=1.5, show_bus_edges=True):
+   # Plots the full graph, with all edges in light gray and bus edges highlighted in color.
+    import matplotlib.pyplot as plt
+    nodes_gdf, edges_gdf = ox.graph_to_gdfs(G, nodes=True, edges=True)
+
+    # Plot background edges (all)
+    fig, ax = plt.subplots(figsize=(8, 8))
+    edges_gdf.plot(ax=ax, linewidth=edge_linewidth, edgecolor="lightgray", zorder=1)
+
+    # plot bus edges
+    if show_bus_edges and "route" in edges_gdf.columns:
+        bus_edges = edges_gdf[edges_gdf["route"] == "bus"]
+        if not bus_edges.empty:
+            bus_edges.plot(
+                ax=ax,
+                linewidth=bus_edge_width,
+                edgecolor=bus_edge_color,
+                label="bus routes",
+                zorder=2
+            )
+            print(f"Highlighted {len(bus_edges)} bus edges.")
+        else:
+            print("No bus edges found to highlight.")
+
+    # plot nodes
+    if node_size > 0:
+        nodes_gdf.plot(ax=ax, markersize=node_size, color="black", zorder=3)
+
+    ax.set_title("Full Graph with Bus Routes Highlighted")
+    ax.set_axis_off()
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+
 
 
 def add_length_attribute(G):
@@ -171,6 +240,7 @@ def assign_multimodal_weights(G, walk_penalty: float = 5.0) -> nx.MultiDiGraph:
             # walking edge: apply penalty
             data["weight"] = length * walk_penalty
     return G
+
 if __name__ == "__main__":
     try:
         G = get_final_graph()
@@ -178,27 +248,18 @@ if __name__ == "__main__":
         start_lat = 29.655880
         start_lon = -82.337473
 
-        # Publix at University Village (Publix #1103, 3195 SW Archer Rd)
-        target_lat = 29.641389  # 29°38′28.9″N
-        target_lon = -82.344722  # 82°20′41.0″W
+        # stadium
+        target_lat = 29.6500368
+        target_lon = -82.3487666
 
         start = find_closest_node_from_latlon(G, start_lon, start_lat)
         target = find_closest_node_from_latlon(G, target_lon, target_lat)
-
         if nx.has_path(G, start, target):
             print("Hooray")
         else:
             print("Not Hooray")
 
-        print("Start node:", start)
-        print("Target node:", target)
-
         map_stat(G)
-        node_attr_count = sum(len(data) for _, data in G.nodes(data=True))
-        edge_attr_count = sum(len(data) for _, _, _, data in G.edges(keys=True, data=True))
-        total_data_values = node_attr_count + edge_attr_count
-        print("Total data values:", total_data_values)
-
         show_map(G)
     except Exception as e:
         print(f"Failed to generate graph: {e}")
