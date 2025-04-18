@@ -1,24 +1,23 @@
 import os
 import math
-import warnings
+import pandas as pd
 from pyrosm import OSM
 import networkx as nx
 import matplotlib
 matplotlib.use("TkAgg")
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import osmnx as ox
-from shapely.geometry import LineString, MultiLineString
+# from shapely.geometry import LineString, MultiLineString, Point
 from pyproj import CRS
-import random
+# import random
+from pyproj import Transformer
 #used this website for pyrosm features such as custom filter
 #https://pyrosm.readthedocs.io/en/latest/basics.html
 
 
-# warnings.filterwarnings("ignore", category=FutureWarning)
-
 # Path to PBF file
-PBF_FILE = "data/north_central_fl.osm.pbf"
-GRAPHML_PATH = "maps/north_central_fl.graphml"
+PBF_FILE = "data/small_Alachua.osm.pbf"
+GRAPHML_PATH = "maps/AlachuaTest.graphml"
 
 def fix_boolean_fields(G):
     #iterates over edges and makes sure the oneway attribute is boolean instead of yes/no
@@ -38,89 +37,63 @@ def fix_boolean_fields(G):
                 data["oneway"] = False
     return G
 
-def load_and_convert_public_transport_graph(filepath: str = PBF_FILE) -> nx.MultiDiGraph:
-    #loads pbf and creates graph with public transportation and highway info
+def load_and_convert_public_transport_graph(filepath: str = PBF_FILE, walk_penalty: float = 5.0) -> nx.MultiDiGraph:
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"File {filepath} does not exist")
-    # Initialize the OSM
     osm = OSM(filepath)
 
-    # custom filter for highway and public transportation
-    highway_values = ["motorway", "primary", "secondary"]
-    public_transport_filter = {
-        "route": ["bus"],
-        "highway": highway_values
-    }
-
-    transit_data = osm.get_data_by_custom_criteria(
-        custom_filter=public_transport_filter,
-        filter_type="keep",
-        keep_nodes=False,
-        keep_ways=True,
-        keep_relations=True
+    #Pull the pure walking network
+    nodes_walk, edges_walk = osm.get_network(
+        nodes=True,
+        network_type="walking"
     )
 
-    if transit_data.empty:
-        raise ValueError("No public transport data found in the file.")
-    # Build a custom graph from the transit data by extracting start and end points of each geometry.
-    G = nx.MultiDiGraph()
-    for idx, row in transit_data.iterrows():
-        geom_obj = row.geometry
-        if geom_obj is None:
-            continue
+    #Pull the drivable network
+    nodes_drive, edges_drive = osm.get_network(
+        nodes=True,
+        network_type="driving+service"
+    )
 
-        # If geometry is a LineString, use its first and last coordinates.
-        if isinstance(geom_obj, LineString):
-            start = tuple(geom_obj.coords[0])
-            end = tuple(geom_obj.coords[-1])
-            G.add_node(start, pos=start)
-            G.add_node(end, pos=end)
-            # Extract a limited set of attributes
-            edge_attrs = {k: v for k, v in row.to_dict().items() if k in ["highway", "name", "route", "oneway", "tags"]}
-            G.add_edge(start, end, **edge_attrs)
+    # Merge edges
+    edges = pd.concat([edges_walk, edges_drive], ignore_index=True)
+    if {"u", "v", "key"}.issubset(edges.columns):
+        edges = edges.drop_duplicates(subset=["u", "v", "key"])
+    else:
+        edges = edges.drop_duplicates(subset=["u", "v"])
 
-        # If geometry is a MultiLineString, iterate over its parts.
-        elif isinstance(geom_obj, MultiLineString):
-            for line in geom_obj.geoms:
-                if isinstance(line, LineString):
-                    start = tuple(line.coords[0])
-                    end = tuple(line.coords[-1])
-                    G.add_node(start, pos=start)
-                    G.add_node(end, pos=end)
-                    edge_attrs = {k: v for k, v in row.to_dict().items() if
-                                  k in ["highway", "name", "route", "oneway", "tags"]}
-                    G.add_edge(start, end, **edge_attrs)
-        else:
-            continue
+    # Merge nodes
+    nodes = pd.concat([nodes_walk, nodes_drive], ignore_index=True)
+    nodes = nodes.drop_duplicates(subset=["id"])
 
-    #print(f"Constructed graph w {G.number_of_nodes()} nodes and {G.number_of_edges()} edges from data.")
+    # get bus-stop Points and append them as transfer nodes
+    stops = osm.get_data_by_custom_criteria(
+        custom_filter={"highway": ["bus_stop"]},
+        filter_type="keep",
+        keep_nodes=True,
+        keep_ways=False,
+        keep_relations=False
+    )
+    stops = stops.loc[stops.geometry.geom_type == "Point"] \
+                 .drop_duplicates(subset=["id"])
+    if not stops.empty:
+        nodes = pd.concat([nodes, stops], ignore_index=True) \
+                 .drop_duplicates(subset=["id"])
 
-    # Set the CRS attribute in the graph (using WGS84) coordinate ref
+    # Build the NetworkX graph
+    G = osm.to_graph(
+        nodes=nodes,
+        edges=edges,
+        graph_type="networkx",
+        osmnx_compatible=True
+    )
+
+    # Project + lengths +  weights
     G.graph["crs"] = CRS.from_epsg(4326)
+    G = ox.project_graph(G)
+    G = add_length_attribute(G)
+    G = assign_multimodal_weights(G, walk_penalty=walk_penalty)
 
-    # Relabel the graph nodes from tuples to integers, but preserve the original coordinates in 'old_label'
-    G = nx.convert_node_labels_to_integers(G, label_attribute='old_label')
-
-    # For each node, assign "x" and "y" based on the original coordinate
-    for node, data in G.nodes(data=True):
-        old_label = data.get('old_label', None)
-        if old_label and isinstance(old_label, tuple) and len(old_label) == 2:
-            lon, lat = old_label
-            data["x"] = lon
-            data["y"] = lat
-        else:
-            data["x"] = None
-            data["y"] = None
-
-    G = fix_boolean_fields(G)
-    tmp_filepath = "temp_graph.graphml"
-    ox.save_graphml(G, filepath=tmp_filepath)
-    G_standard = ox.load_graphml(tmp_filepath)
-    G_proj = ox.project_graph(G_standard)
-    G_standard = add_length_attribute(G_proj)
-    os.remove(tmp_filepath)
-
-    return G_standard
+    return G
 
 
 def map_stat(G: nx.MultiDiGraph) -> None:
@@ -128,7 +101,7 @@ def map_stat(G: nx.MultiDiGraph) -> None:
     print(f"Nodes: {G.number_of_nodes()}, Edges: {G.number_of_edges()}")
 
 
-def show_map(G, node_size=10, edge_linewidth=0.5):
+def show_map(G, node_size=1000, edge_linewidth=0.5):
     fig, ax = ox.plot_graph(G, node_size=node_size, edge_linewidth=edge_linewidth, show=True)
     # OSMnx calls plt.show() internally
 
@@ -145,65 +118,87 @@ def add_length_attribute(G):
     return G
 
 def get_final_graph():
-    # Check if the final graph already exists:
+    # If a cached GraphML already exists, try loading it
     if os.path.exists(GRAPHML_PATH):
-        G = ox.load_graphml(GRAPHML_PATH)
-        G = ox.project_graph(G)
-        G = add_length_attribute(G)
+        try:
+            G = ox.load_graphml(GRAPHML_PATH)
+            G = ox.project_graph(G)
+            G = add_length_attribute(G)
+        except Exception:
+            os.remove(GRAPHML_PATH)
+            G = load_and_convert_public_transport_graph(PBF_FILE)
     else:
         G = load_and_convert_public_transport_graph(PBF_FILE)
-        ox.save_graphml(G, filepath=GRAPHML_PATH)
+
+    G = fix_boolean_fields(G)
+    ox.save_graphml(G, filepath=GRAPHML_PATH)
+    G = assign_multimodal_weights(G, walk_penalty=5.0)
     return G
 
-#to get random nodes for algs
-def get_random_node_from_bbox(G, min_x, min_y, max_x, max_y):
-    candidates = [
-        node for node, data in G.nodes(data=True)
-        if data.get("x") is not None and data.get("y") is not None and
-           min_x <= data["x"] <= max_x and
-           min_y <= data["y"] <= max_y
-    ]
-    if not candidates:
-        raise ValueError("No nodes found in this bounding box.")
-    return random.choice(candidates)
+def find_closest_node_from_latlon(G, lon, lat):
+    #Given a graph G (with projected x/y coords) and a (lon, lat) point,
+    #returns the closest node ID to that point.
 
-"""
-Bounding boxes for gainesville and Orlando areas for testing 
-gain_x_min, gain_x_max = 357000, 385000 
-gain_y_min, gain_y_max = 3263290, 3290360
+    # Convert (lon, lat) to projected x/y using the graph's CRS
+    crs_graph = G.graph.get("crs", None)
+    if crs_graph is None:
+        raise ValueError("Graph does not have a defined CRS.")
 
-orlando_x_min, orlando_x_max = 434600, 479620
-orlando_y_min, orlando_y_max = 3134170, 3166610
-    """
-def get_gainesville_to_orlando_nodes(G):
-    gain_x_min, gain_x_max = 357000, 385000
-    gain_y_min, gain_y_max = 3263290, 3290360
+    transformer = Transformer.from_crs("epsg:4326", crs_graph, always_xy=True)
+    x_target, y_target = transformer.transform(lon, lat)
 
-    orlando_x_min, orlando_x_max = 434600, 479620
-    orlando_y_min, orlando_y_max = 3134170, 3166610
+    # Search for the closest node in projected space
+    closest_node = None
+    min_dist = float('inf')
+    for node, data in G.nodes(data=True):
+        x, y = data.get("x"), data.get("y")
+        if x is not None and y is not None:
+            dist = (x - x_target) ** 2 + (y - y_target) ** 2
+            if dist < min_dist:
+                min_dist = dist
+                closest_node = node
+    return closest_node
 
-    start = get_random_node_from_bbox(G, gain_x_min, gain_y_min, gain_x_max, gain_y_max)
-    target = get_random_node_from_bbox(G, orlando_x_min, orlando_y_min, orlando_x_max, orlando_y_max)
-    return start, target
+def assign_multimodal_weights(G, walk_penalty: float = 5.0) -> nx.MultiDiGraph:
+    #if it's a route, weight = length, else it's a walkable highway, so add a penalty so that we prefer bus route
 
+    for u, v, key, data in G.edges(keys=True, data=True):
+        length = data.get("length", 1.0)
+        if data.get("route") is not None:
+            # transit edge: no extra penalty
+            data["weight"] = length
+        else:
+            # walking edge: apply penalty
+            data["weight"] = length * walk_penalty
+    return G
 if __name__ == "__main__":
     try:
         G = get_final_graph()
-        start, target = get_gainesville_to_orlando_nodes(G)
+        #Theory Gville
+        start_lat = 29.655880
+        start_lon = -82.337473
 
-        print(f"Start node: {start}")
-        print(f"Location: ({G.nodes[start]['x']:.2f}, {G.nodes[start]['y']:.2f})")
+        # Publix at University Village (Publix #1103, 3195 SW Archer Rd)
+        target_lat = 29.641389  # 29°38′28.9″N
+        target_lon = -82.344722  # 82°20′41.0″W
 
-        print(f"Target node: {target}")
-        print(f"Location: ({G.nodes[target]['x']:.2f}, {G.nodes[target]['y']:.2f})")
+        start = find_closest_node_from_latlon(G, start_lon, start_lat)
+        target = find_closest_node_from_latlon(G, target_lon, target_lat)
+
+        if nx.has_path(G, start, target):
+            print("Hooray")
+        else:
+            print("Not Hooray")
+
+        print("Start node:", start)
+        print("Target node:", target)
+
         map_stat(G)
-        ox.plot_graph(G, node_color=["red" if n == start else "blue" if n == target else "gray" for n in G.nodes],
-                      node_size=10, show=True)
+        node_attr_count = sum(len(data) for _, data in G.nodes(data=True))
+        edge_attr_count = sum(len(data) for _, _, _, data in G.edges(keys=True, data=True))
+        total_data_values = node_attr_count + edge_attr_count
+        print("Total data values:", total_data_values)
 
-        # Use get_final_graph to load or generate the graph
-        # final_graph = get_final_graph()
-        # map_stat(final_graph)
-        # show_map(final_graph)
-
+        show_map(G)
     except Exception as e:
         print(f"Failed to generate graph: {e}")
