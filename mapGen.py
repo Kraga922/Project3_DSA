@@ -254,6 +254,8 @@ if __name__ == "__main__":
 
         start = find_closest_node_from_latlon(G, start_lon, start_lat)
         target = find_closest_node_from_latlon(G, target_lon, target_lat)
+        print(f"Start node: {start}") # 4418047440
+        print(f"Target node: {target}") # 8001930196
         if nx.has_path(G, start, target):
             print("Hooray")
         else:

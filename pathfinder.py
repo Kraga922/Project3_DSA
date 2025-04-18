@@ -2,21 +2,21 @@ import os
 import math
 import argparse
 import warnings
+import folium
 from pyrosm import OSM
 import networkx as nx
 import matplotlib
 matplotlib.use("TkAgg")
 import osmnx as ox
 from shapely.geometry import LineString, MultiLineString
-from pyproj import CRS
+from pyproj import CRS, Transformer
+from mapGen import *
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 ox.settings.log_console = False
 
-# Path configurations
-PBF_FILE = "north_central_fl.osm.pbf"
-GRAPHML_PATH = "north_central_fl.graphml"
+
 
 def fix_boolean_fields(G):
     """Convert oneway values to proper booleans"""
@@ -28,58 +28,6 @@ def fix_boolean_fields(G):
             else:
                 data["oneway"] = False
     return G
-
-def load_and_convert_public_transport_graph(filepath: str = PBF_FILE) -> nx.MultiDiGraph:
-    """Load OSM data and create transportation graph"""
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"OSM file {filepath} not found")
-    
-    osm = OSM(filepath)
-    # custom_filter = {"route": ["bus"], "highway": ["motorway", "primary", "secondary"]}
-    custom_filter = {"highway": True}
-
-    
-    # transit_data = osm.get_data_by_custom_criteria(
-    #     custom_filter=custom_filter,
-    #     filter_type="keep",
-    #     keep_nodes=False,
-    #     keep_ways=True,
-    #     keep_relations=True
-    # )
-
-    transit_data = osm.get_network(network_type="all")
-
-    G = nx.MultiDiGraph()
-    for idx, row in transit_data.iterrows():
-        geom = row.geometry
-        if isinstance(geom, LineString):
-            coords = list(geom.coords)
-        elif isinstance(geom, MultiLineString):
-            coords = [list(line.coords) for line in geom.geoms]
-        else:
-            continue
-
-        for segment in coords if isinstance(coords[0], list) else [coords]:
-            start = segment[0]
-            end = segment[-1]
-            attrs = {k: v for k, v in row.items() if k in ["highway", "name", "route", "oneway"]}
-            G.add_node(start, x=start[0], y=start[1])
-            G.add_node(end, x=end[0], y=end[1])
-            G.add_edge(start, end, **attrs)
-
-    G = fix_boolean_fields(G)
-    G = nx.convert_node_labels_to_integers(G, label_attribute="coords")
-    G = ox.add_edge_lengths(G)
-    return G
-
-def get_final_graph():
-    """Load or generate the transportation graph"""
-    if os.path.exists(GRAPHML_PATH):
-        return ox.load_graphml(GRAPHML_PATH)
-    else:
-        G = load_and_convert_public_transport_graph(PBF_FILE)
-        ox.save_graphml(G, GRAPHML_PATH)
-        return G
 
 def astar_shortest_path(G, source_node_id, target_node_id):
     """A* pathfinding implementation"""
@@ -94,33 +42,37 @@ def astar_shortest_path(G, source_node_id, target_node_id):
     except nx.NetworkXNoPath:
         raise ValueError(f"No path between nodes {source_node_id} and {target_node_id}")
 
+
 def visualize_path(G, path):
-    """Generate interactive map using Folium"""
-    import folium
-    
-    # Get center coordinates
-    start_node = path[0]
-    lat, lon = G.nodes[start_node]['y'], G.nodes[start_node]['x']
-    
-    # Create Folium map
-    m = folium.Map(location=[lat, lon], zoom_start=14)
-    
-    # Add route as red line
+    """Generate interactive map using Folium with corrected coordinate projection"""
+
+    # Convert projected coordinates to lat/lon
+    transformer = Transformer.from_crs(G.graph["crs"], "epsg:4326", always_xy=True)
+
     route_coords = []
     for node in path:
-        route_coords.append((
-            G.nodes[node]['y'],  # Latitude
-            G.nodes[node]['x']   # Longitude
-        ))
-    
+        x, y = G.nodes[node]["x"], G.nodes[node]["y"]
+        lon, lat = transformer.transform(x, y)
+        route_coords.append((lat, lon))  # Folium uses (lat, lon)
+
+    print("Start of path:", route_coords[0])
+    print("End of path:", route_coords[-1])
+
+    # Center map on first coordinate
+    m = folium.Map(location=route_coords[0], zoom_start=15)
+
     folium.PolyLine(
         locations=route_coords,
         color='blue',
         weight=5,
-        opacity=0.7
+        opacity=0.8
     ).add_to(m)
-    
-    m.save('optimal_path.html')
+
+    # Optional: add markers for start/end
+    folium.Marker(route_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(m)
+    folium.Marker(route_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(m)
+
+    m.save("optimal_path.html")
     return m
 
 def print_sample_nodes(G, num_nodes=5):
