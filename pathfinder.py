@@ -12,6 +12,7 @@ from shapely.geometry import LineString, MultiLineString
 from pyproj import CRS, Transformer
 from mapGen import *
 import heapq
+import time
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -173,6 +174,62 @@ def print_sample_nodes(G, num_nodes=5):
     print("\nSample nodes in graph:")
     for i, node in enumerate(list(G.nodes())[:num_nodes]):
         print(f"Node {node}: ({G.nodes[node]['x']:.5f}, {G.nodes[node]['y']:.5f})")
+
+def compareAlgorithms():
+    #Compare time for each algorithm to execute
+    parser = argparse.ArgumentParser(description='A* Pathfinding for Transportation Network')
+
+    parser.add_argument('-s', '--source', type=int, default=2168047757, help='Source node ID (default: 4418047440)')
+    parser.add_argument('-t', '--target', type=int, default=8077888404, help='Target node ID (default: 8001930196)')
+
+    parser.add_argument('-l', '--list', action='store_true', help='List sample nodes')
+    args = parser.parse_args()
+
+    try:
+        G = get_final_graph()
+
+        
+        if args.list:
+            print_sample_nodes(G)
+            exit()
+
+        # Sample nodes from initial XML data
+        if not args.source or not args.target:
+            print(f"Source: {args.source}, Target: {args.target}")
+
+        
+        #Timing A* algorithm
+        begin_time_astar = float(time.time())
+        a_path, a_length = astar_shortest_path(G, args.source, args.target)
+        astar_time = float(time.time()) - begin_time_astar
+        print("A* algorithm time:" + astar_time)
+
+        #Timing Dijkstra's algorithm
+        begin_time_dijkstra = float(time.time())
+        dij_path, dij_length = dijkstra_shortest_path(G, args.source, args.target)
+        dijkstra_time = float(time.time()) - begin_time_dijkstra
+        print("Dijkstra algorithm time: " + dijkstra_time)
+
+        #print(G)
+
+        #Check output
+        print(f"First node coordinates: {G.nodes[a_path[0]]['x']}, {G.nodes[a_path[0]]['y']}")
+        print(f"Last node coordinates: {G.nodes[a_path[-1]]['x']}, {G.nodes[a_path[-1]]['y']}")
+
+        # print(f"\nA* path found ({a_path})")
+        print(f"\nA* path found ({len(a_path)} nodes)")
+        print(f"Total length of A*: {a_length:.2f} meters")
+
+        # print(f"\nDijkstra path found ({dij_path})")
+        print(f"\nDijkstra path found ({len(dij_path)} nodes)")
+        print(f"Total length of Dijkstra: {dij_length:.2f} meters")
+        visualize_path(G, a_path, dij_path)
+        # print("Map saved to optimal_path.html")
+
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        if "No path" in str(e):
+            print("Possible causes: Disconnected nodes or invalid transportation routes")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='A* Pathfinding for Transportation Network')
