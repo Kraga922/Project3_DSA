@@ -2,6 +2,9 @@ import math
 import queue
 import networkx as nx
 
+fullTable = False
+#Set true to return full output, not just path to input destination
+
 def dijkstrasAlgorithm(G, start, destination):
     #Set up list of nodes, visited set, and priority queue
     result = {}
@@ -24,9 +27,12 @@ def dijkstrasAlgorithm(G, start, destination):
         for v in G.neighbors(current):
             if v not in visited:
                 pq.put(v)
-                if (distance + G[current][v]["distance"] < result[v][0]):
-                    result[v][0] = distance + G[current][v]["distance"]
+                if (distance + G[current][v]['length'] < result[v][0]):
+                    result[v][0] = distance + G[current][v]['length']
                     result[v][1] = current
+
+    if (fullTable):
+        return result
 
     path = []
 
@@ -42,7 +48,9 @@ def dijkstrasAlgorithm(G, start, destination):
 
     path.append(start)
     path.reverse()
+    #Reversing path to orient it correctly, optional
 
+    
     return path
 
 
