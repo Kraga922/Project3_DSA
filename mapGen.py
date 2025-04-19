@@ -211,21 +211,19 @@ def add_length_attribute(G):
     return G
 
 def get_final_graph():
-    # If a cached GraphML already exists, try loading it
     if os.path.exists(GRAPHML_PATH):
         try:
             G = ox.load_graphml(GRAPHML_PATH)
-            G = ox.project_graph(G)
             G = add_length_attribute(G)
+            G = fix_boolean_fields(G)
+            G = assign_multimodal_weights(G, walk_penalty=5.0)
+            return G
         except Exception:
             os.remove(GRAPHML_PATH)
-            G = load_and_convert_public_transport_graph(PBF_FILE)
-    else:
-        G = load_and_convert_public_transport_graph(PBF_FILE)
 
-    G = fix_boolean_fields(G)
+    # If not cached or load failed, rebuild
+    G = load_and_convert_public_transport_graph(PBF_FILE)
     ox.save_graphml(G, filepath=GRAPHML_PATH)
-    G = assign_multimodal_weights(G, walk_penalty=5.0)
     return G
 
 def find_closest_node_from_latlon(G, lon, lat):
