@@ -1,3 +1,5 @@
+from geopy.geocoders import Nominatim
+
 import os
 import math
 import argparse
@@ -17,7 +19,6 @@ import time
 # Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 ox.settings.log_console = False
-
 
 
 def fix_boolean_fields(G):
@@ -231,11 +232,42 @@ def compareAlgorithms():
         if "No path" in str(e):
             print("Possible causes: Disconnected nodes or invalid transportation routes")
 
+
+def getNodeFromLongLat(start_address, end_address, G):
+    geolocator = Nominatim(user_agent="myApp", timeout=10)
+    
+    startLoc = geolocator.geocode(start_address)
+    if startLoc is None:
+        raise ValueError(f"Could not geocode the start address: {start_address}")
+    
+    endLoc = geolocator.geocode(end_address)
+    if endLoc is None:
+        raise ValueError(f"Could not geocode the end address: {end_address}")
+    
+    start_lat, start_lon = startLoc.latitude, startLoc.longitude
+    end_lat, end_lon = endLoc.latitude, endLoc.longitude
+    
+
+    start_node = find_closest_node_from_latlon(G, start_lon, start_lat)
+    end_node = find_closest_node_from_latlon(G, end_lon, end_lat)
+    
+    return start_node, end_node
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='A* Pathfinding for Transportation Network')
 
-    parser.add_argument('-s', '--source', type=int, default=2168047757, help='Source node ID (default: 4418047440)')
-    parser.add_argument('-t', '--target', type=int, default=8077888404, help='Target node ID (default: 8001930196)')
+
+
+    parser.add_argument('-s', '--start_address', type=str, 
+                        default= "2088 Museum Rd, Gainesville, Florida 32603", help='Source node ID (default: 4418047440)')
+    parser.add_argument('-e', '--end_address', type=str,  
+                        default= "3019 SW 12th St, Gainesville, Florida 32608", help='Source node ID (default: 4418047440)')
+
+
+    # parser.add_argument('-s', '--source', type=int, default=2168047757, help='Source node ID (default: 4418047440)')
+    # parser.add_argument('-t', '--target', type=int, default=8077888404, help='Target node ID (default: 8001930196)')
 
     parser.add_argument('-l', '--list', action='store_true', help='List sample nodes')
     args = parser.parse_args()
@@ -243,17 +275,20 @@ if __name__ == "__main__":
     try:
         G = get_final_graph()
 
+        start_node, end_node = getNodeFromLongLat(args.start_address, args.end_address, G)
         
         if args.list:
             print_sample_nodes(G)
             exit()
 
         # Sample nodes from initial XML data
-        if not args.source or not args.target:
-            print(f"Source: {args.source}, Target: {args.target}")
+        # if not args.source or not args.target:
+        #     print(f"Source: {start_node}, Target: {end_node}")
 
-        a_path, a_length = astar_shortest_path(G, args.source, args.target)
-        dij_path, dij_length = dijkstra_shortest_path(G, args.source, args.target)
+        #     print(f"Source: {start_node}, Target: {end_node}")
+        
+        a_path, a_length = astar_shortest_path(G, start_node, end_node)
+        dij_path, dij_length = dijkstra_shortest_path(G, start_node, end_node)
 
 
         print(G)
