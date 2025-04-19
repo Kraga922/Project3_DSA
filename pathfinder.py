@@ -11,6 +11,7 @@ import osmnx as ox
 from shapely.geometry import LineString, MultiLineString
 from pyproj import CRS, Transformer
 from mapGen import *
+import heapq
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -30,49 +31,141 @@ def fix_boolean_fields(G):
     return G
 
 def astar_shortest_path(G, source_node_id, target_node_id):
-    """A* pathfinding implementation"""
+    """A* pathfinding implementation from scratch"""
     def heuristic(u, v):
-        return math.hypot(G.nodes[v]['x'] - G.nodes[u]['x'], 
+        return math.hypot(G.nodes[v]['x'] - G.nodes[u]['x'],
                          G.nodes[v]['y'] - G.nodes[u]['y'])
     
-    try:
-        path = nx.astar_path(G, source_node_id, target_node_id, heuristic, 'length')
-        length = sum(G[u][v][0]['length'] for u, v in zip(path[:-1], path[1:]))
-        return path, length
-    except nx.NetworkXNoPath:
+    open_set = {source_node_id}
+    came_from = {}
+    g_score = {node: float('inf') for node in G.nodes}
+    g_score[source_node_id] = 0
+    f_score = {node: float('inf') for node in G.nodes}
+    f_score[source_node_id] = heuristic(source_node_id, target_node_id)
+
+    while open_set:
+        # Get node with lowest f_score
+        current = min(open_set, key=lambda node: f_score[node])
+        
+        if current == target_node_id:
+            # Reconstruct path
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
+            
+            # Calculate total length
+            length = 0
+            for u, v in zip(path[:-1], path[1:]):
+                # Get first edge between nodes (same as original code)
+                length += G[u][v][0]['length']
+            return path, length
+        
+        open_set.remove(current)
+        
+        # Iterate through neighbors
+        for neighbor in G.neighbors(current):
+            # Get first edge's length (same as original [0] index)
+            edge_length = G[current][neighbor][0]['length']
+            tentative_g = g_score[current] + edge_length
+            
+            if tentative_g < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                f_score[neighbor] = tentative_g + heuristic(neighbor, target_node_id)
+                if neighbor not in open_set:
+                    open_set.add(neighbor)
+    
+    raise ValueError(f"No path between nodes {source_node_id} and {target_node_id}")
+
+def dijkstra_shortest_path(G, source_node_id, target_node_id):
+    """Dijkstra's shortest path implementation from scratch"""
+    distances = {node: float('inf') for node in G.nodes}
+    distances[source_node_id] = 0
+    prev = {}
+    heap = [(0, source_node_id)]
+    
+    while heap:
+        current_dist, current_node = heapq.heappop(heap)
+        
+        # Early exit if target reached
+        if current_node == target_node_id:
+            break
+            
+        # Skip if better path already found
+        if current_dist > distances[current_node]:
+            continue
+            
+        for neighbor in G.neighbors(current_node):
+            # Get first edge's length (same as A* implementation)
+            edge_length = G[current_node][neighbor][0]['length']
+            new_dist = current_dist + edge_length
+            
+            if new_dist < distances[neighbor]:
+                distances[neighbor] = new_dist
+                prev[neighbor] = current_node
+                heapq.heappush(heap, (new_dist, neighbor))
+    
+    # Path reconstruction
+    if current_node != target_node_id:
         raise ValueError(f"No path between nodes {source_node_id} and {target_node_id}")
+    
+    path = []
+    current = target_node_id
+    while current in prev:
+        path.append(current)
+        current = prev[current]
+    path.append(source_node_id)
+    path.reverse()
+    
+    return path, distances[target_node_id]
 
 
-def visualize_path(G, path):
+def visualize_path(G, a_path, dij_path):
     """Generate interactive map using Folium with corrected coordinate projection"""
 
     # Convert projected coordinates to lat/lon
     transformer = Transformer.from_crs(G.graph["crs"], "epsg:4326", always_xy=True)
 
-    route_coords = []
-    for node in path:
+    a_route_coords = []
+    for node in a_path:
         x, y = G.nodes[node]["x"], G.nodes[node]["y"]
         lon, lat = transformer.transform(x, y)
-        route_coords.append((lat, lon))  # Folium uses (lat, lon)
+        a_route_coords.append((lat, lon))  # Folium uses (lat, lon)
 
-    print("Start of path:", route_coords[0])
-    print("End of path:", route_coords[-1])
+    dij_route_coords = []
+    for node in dij_path:
+        x, y = G.nodes[node]["x"], G.nodes[node]["y"]
+        lon, lat = transformer.transform(x, y)
+        dij_route_coords.append((lat, lon))  # Folium uses (lat, lon)
+
+    print("Start of path:", a_route_coords[0])
+    print("End of path:", a_route_coords[-1])
 
     # Center map on first coordinate
-    m = folium.Map(location=route_coords[0], zoom_start=15)
+    m = folium.Map(location=a_route_coords[0], zoom_start=15)
 
     folium.PolyLine(
-        locations=route_coords,
+        locations=a_route_coords,
         color='blue',
         weight=5,
         opacity=0.8
     ).add_to(m)
+    
+    folium.PolyLine(
+        locations=dij_route_coords,
+        color='red',
+        weight=5,
+        opacity=0.8,
+        dashArray='5,12'  
+    ).add_to(m)
 
     # Optional: add markers for start/end
-    folium.Marker(route_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(m)
-    folium.Marker(route_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(m)
+    folium.Marker(a_route_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(m)
+    folium.Marker(a_route_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(m)
 
-    m.save("optimal_path.html")
+    m.save("combined_path.html")
     return m
 
 def print_sample_nodes(G, num_nodes=5):
@@ -83,8 +176,10 @@ def print_sample_nodes(G, num_nodes=5):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='A* Pathfinding for Transportation Network')
-    parser.add_argument('-s', '--source', type=int, help='Source node ID')
-    parser.add_argument('-t', '--target', type=int, help='Target node ID')
+
+    parser.add_argument('-s', '--source', type=int, default=2168047757, help='Source node ID (default: 4418047440)')
+    parser.add_argument('-t', '--target', type=int, default=8077888404, help='Target node ID (default: 8001930196)')
+
     parser.add_argument('-l', '--list', action='store_true', help='List sample nodes')
     args = parser.parse_args()
 
@@ -98,22 +193,25 @@ if __name__ == "__main__":
 
         # Sample nodes from initial XML data
         if not args.source or not args.target:
-            print("Using default sample nodes from XML header:")
-            args.source = 99  # (-81.386314, 28.625401)
-            args.target = 110  # (-81.386360, 28.626255)
             print(f"Source: {args.source}, Target: {args.target}")
 
-        path, length = astar_shortest_path(G, args.source, args.target)
+        a_path, a_length = astar_shortest_path(G, args.source, args.target)
+        dij_path, dij_length = dijkstra_shortest_path(G, args.source, args.target)
+
 
         print(G)
 
-        print(f"First node coordinates: {G.nodes[path[0]]['x']}, {G.nodes[path[0]]['y']}")
-        print(f"Last node coordinates: {G.nodes[path[-1]]['x']}, {G.nodes[path[-1]]['y']}")
+        print(f"First node coordinates: {G.nodes[a_path[0]]['x']}, {G.nodes[a_path[0]]['y']}")
+        print(f"Last node coordinates: {G.nodes[a_path[-1]]['x']}, {G.nodes[a_path[-1]]['y']}")
 
-        print(f"\nOptimal path found ({path})")
-        print(f"\nOptimal path found ({len(path)} nodes)")
-        print(f"Total length: {length:.2f} meters")
-        visualize_path(G, path)
+        # print(f"\nA* path found ({a_path})")
+        print(f"\nA* path found ({len(a_path)} nodes)")
+        print(f"Total length of A*: {a_length:.2f} meters")
+
+        # print(f"\nDijkstra path found ({dij_path})")
+        print(f"\nDijkstra path found ({len(dij_path)} nodes)")
+        print(f"Total length of Dijkstra: {dij_length:.2f} meters")
+        visualize_path(G, a_path, dij_path)
         # print("Map saved to optimal_path.html")
 
     except Exception as e:
