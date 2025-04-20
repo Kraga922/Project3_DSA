@@ -1,17 +1,17 @@
 from geopy.geocoders import Nominatim
 
-import os
-import math
+# import os
+# import math
 import argparse
 import warnings
 import folium
-from pyrosm import OSM
-import networkx as nx
+# from pyrosm import OSM
+# import networkx as nx
 import matplotlib
 matplotlib.use("TkAgg")
-import osmnx as ox
-from shapely.geometry import LineString, MultiLineString
-from pyproj import CRS, Transformer
+# import osmnx as ox
+# from shapely.geometry import LineString, MultiLineString
+# from pyproj import CRS, Transformer
 from mapGen import *
 import heapq
 import time
@@ -124,51 +124,56 @@ def dijkstra_shortest_path(G, source_node_id, target_node_id):
     return path, distances[target_node_id]
 
 
-def visualize_path(G, a_path, dij_path):
-    """Generate interactive map using Folium with corrected coordinate projection"""
+def visualize_path(G, a_path=None, dij_path=None):
+    """Draw only the selected path(s)"""
 
-    # Convert projected coordinates to lat/lon
     transformer = Transformer.from_crs(G.graph["crs"], "epsg:4326", always_xy=True)
+    m = None
 
-    a_route_coords = []
-    for node in a_path:
-        x, y = G.nodes[node]["x"], G.nodes[node]["y"]
-        lon, lat = transformer.transform(x, y)
-        a_route_coords.append((lat, lon))  # Folium uses (lat, lon)
+    if dij_path:
+        d_coords = [
+            transformer.transform(G.nodes[node]["x"], G.nodes[node]["y"])[::-1]
+            for node in dij_path
+        ]
+        m = folium.Map(location=d_coords[0], zoom_start=15)
+        folium.PolyLine(
+            locations=d_coords,
+            color='blue',
+            weight=5,
+            opacity=0.8,
+            tooltip="Dijkstra Path"
+        ).add_to(m)
+        folium.Marker(d_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(m)
+        folium.Marker(d_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(m)
 
-    dij_route_coords = []
-    for node in dij_path:
-        x, y = G.nodes[node]["x"], G.nodes[node]["y"]
-        lon, lat = transformer.transform(x, y)
-        dij_route_coords.append((lat, lon))  # Folium uses (lat, lon)
+    if a_path:
+        a_coords = [
+            transformer.transform(G.nodes[node]["x"], G.nodes[node]["y"])[::-1]
+            for node in a_path
+        ]
+        if not m:
+            m = folium.Map(location=a_coords[0], zoom_start=15)
+        folium.PolyLine(
+            locations=a_coords,
+            color='red',
+            weight=5,
+            opacity=0.8,
+            dash_array='5,12',
+            tooltip="A* Path"
+        ).add_to(m)
+        folium.Marker(a_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(m)
+        folium.Marker(a_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(m)
+    #saves based on algorithm chosen
+    if m:
+        filename = "combined_path.html"
+        if a_path and not dij_path:
+            filename = "astar_path.html"
+        elif dij_path and not a_path:
+            filename = "dijkstra_path.html"
 
-    print("Start of path:", a_route_coords[0])
-    print("End of path:", a_route_coords[-1])
+        m.save(filename)
+        return filename
 
-    # Center map on first coordinate
-    m = folium.Map(location=a_route_coords[0], zoom_start=15)
-
-    folium.PolyLine(
-        locations=a_route_coords,
-        color='blue',
-        weight=5,
-        opacity=0.8
-    ).add_to(m)
-    
-    folium.PolyLine(
-        locations=dij_route_coords,
-        color='red',
-        weight=5,
-        opacity=0.8,
-        dashArray='5,12'  
-    ).add_to(m)
-
-    # Optional: add markers for start/end
-    folium.Marker(a_route_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(m)
-    folium.Marker(a_route_coords[-1], popup="End", icon=folium.Icon(color="red")).add_to(m)
-
-    m.save("combined_path.html")
-    return m
 
 def print_sample_nodes(G, num_nodes=5):
     """Display sample nodes for testing"""

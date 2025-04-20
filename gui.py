@@ -1,11 +1,53 @@
 import tkinter as tk
 from tkinter import messagebox
-
-
-#Basic window to take user input
+from pathfinder import get_final_graph, getNodeFromLongLat, astar_shortest_path, dijkstra_shortest_path, visualize_path
+import time
+import webbrowser
 def main():
-    print("")
-    #Add functionality
+    start = startBox.get()
+    end = endBox.get()
+    use_dij = toggleDij.get()
+    use_astar = toggleA.get()
+    testing = test.get()
+
+    if not start or not end:
+        messagebox.showerror("Missing Input", "Please enter both a starting location and a destination.")
+        return
+
+    if not use_dij and not use_astar:
+        messagebox.showerror("No Algorithm Selected", "Please select at least one algorithm to use.")
+        return
+
+    try:
+        G = get_final_graph()
+        start_node, end_node = getNodeFromLongLat(start, end, G)
+
+        results = []
+        a_path = d_path = None
+
+        # A*
+        if use_astar:
+            t0 = time.time()
+            a_path, a_length = astar_shortest_path(G, start_node, end_node)
+            a_time = time.time() - t0
+            results.append(f"A* Path: {a_length:.2f} meters\nTime: {a_time:.4f} sec")
+
+        # Dijkstra
+        if use_dij:
+            t0 = time.time()
+            d_path, d_length = dijkstra_shortest_path(G, start_node, end_node)
+            d_time = time.time() - t0
+            results.append(f"Dijkstra Path: {d_length:.2f} meters\nTime: {d_time:.4f} sec")
+
+        # Visualize and open
+        filename = visualize_path(G, a_path if use_astar else None, d_path if use_dij else None)
+        summary = "\n\n".join(results)
+        summary += f"\n\nMap saved to '{filename}'."
+        messagebox.showinfo("Route Found", summary)
+        webbrowser.open(filename)
+
+    except Exception as e:
+        messagebox.showerror("Error", f"Something went wrong:\n{str(e)}")
 
 #Set up window
 window = tk.Tk()
