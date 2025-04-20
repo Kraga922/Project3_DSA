@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox
-from pathfinder import get_final_graph, getNodeFromLongLat, astar_shortest_path, dijkstra_shortest_path, visualize_path
+from pathfinder import get_final_graph, getNodeFromLongLat, astar_shortest_path, dijkstra_shortest_path, visualize_path, compareAlgorithms
 import time
 import webbrowser
 def main():
@@ -38,6 +38,10 @@ def main():
             d_path, d_length = dijkstra_shortest_path(G, start_node, end_node)
             d_time = time.time() - t0
             results.append(f"Dijkstra Path: {d_length:.2f} meters\nTime: {d_time:.4f} sec")
+
+        #Test mode
+        if testing:
+            compareAlgorithms()
 
         # Visualize and open
         filename = visualize_path(G, a_path if use_astar else None, d_path if use_dij else None)
