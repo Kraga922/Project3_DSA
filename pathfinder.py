@@ -1,17 +1,9 @@
 from geopy.geocoders import Nominatim
-
-# import os
-# import math
 import argparse
 import warnings
 import folium
-# from pyrosm import OSM
-# import networkx as nx
 import matplotlib
 matplotlib.use("TkAgg")
-# import osmnx as ox
-# from shapely.geometry import LineString, MultiLineString
-# from pyproj import CRS, Transformer
 from mapGen import *
 import heapq
 import time
