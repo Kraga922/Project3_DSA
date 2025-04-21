@@ -14,8 +14,8 @@ import pandas as pd
 
 
 # Path to PBF file
-PBF_FILE = "data/small_Alachua.osm.pbf"
-GRAPHML_PATH = "maps/AlachuaBusRoutes2.graphml"
+PBF_FILE = "small_Alachua.osm.pbf"
+GRAPHML_PATH = "AlachuaBusRoutes2.graphml"
 
 def fix_boolean_fields(G):
     #iterates over edges and makes sure the oneway attribute is boolean instead of yes/no
