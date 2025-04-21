@@ -1,22 +1,13 @@
 from geopy.geocoders import Nominatim
-
-# import os
-# import math
 import argparse
 import warnings
 import folium
-# from pyrosm import OSM
-# import networkx as nx
 import matplotlib
 matplotlib.use("TkAgg")
-# import osmnx as ox
-# from shapely.geometry import LineString, MultiLineString
-# from pyproj import CRS, Transformer
 from mapGen import *
 import heapq
 import time
 
-# Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 ox.settings.log_console = False
 
@@ -60,7 +51,6 @@ def astar_shortest_path(G, source_node_id, target_node_id):
             # Calculate total length
             length = 0
             for u, v in zip(path[:-1], path[1:]):
-                # Get first edge between nodes (same as original code)
                 length += G[u][v][0]['length']
             return path, length
         
@@ -68,7 +58,6 @@ def astar_shortest_path(G, source_node_id, target_node_id):
         
         # Iterate through neighbors
         for neighbor in G.neighbors(current):
-            # Get first edge's length (same as original [0] index)
             edge_length = G[current][neighbor][0]['length']
             tentative_g = g_score[current] + edge_length
             
@@ -90,17 +79,14 @@ def dijkstra_shortest_path(G, source_node_id, target_node_id):
     
     while heap:
         current_dist, current_node = heapq.heappop(heap)
-        
-        # Early exit if target reached
+
         if current_node == target_node_id:
             break
             
-        # Skip if better path already found
         if current_dist > distances[current_node]:
             continue
             
         for neighbor in G.neighbors(current_node):
-            # Get first edge's length (same as A* implementation)
             edge_length = G[current_node][neighbor][0]['length']
             new_dist = current_dist + edge_length
             
@@ -109,7 +95,6 @@ def dijkstra_shortest_path(G, source_node_id, target_node_id):
                 prev[neighbor] = current_node
                 heapq.heappush(heap, (new_dist, neighbor))
     
-    # Path reconstruction
     if current_node != target_node_id:
         raise ValueError(f"No path between nodes {source_node_id} and {target_node_id}")
     
