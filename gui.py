@@ -19,7 +19,7 @@ def main():
         return
 
     try:
-        G = get_final_graph()
+        global G
         start_node, end_node = getNodeFromLongLat(start, end, G)
 
         results = []
@@ -52,6 +52,9 @@ def main():
 
     except Exception as e:
         messagebox.showerror("Error", f"Something went wrong:\n{str(e)}")
+print("Loading graph... please wait.")
+G = get_final_graph()
+print("Graph loaded successfully.")
 
 #Set up window
 window = tk.Tk()
